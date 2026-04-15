@@ -1,0 +1,620 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>SDN Host Discovery Service</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Syne:wght@400;700;800&display=swap" rel="stylesheet"/>
+<style>
+  /* ── reset & tokens ─────────────────────────────────────── */
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg:        #050d12;
+    --panel:     #0b1923;
+    --border:    #0e2d3f;
+    --glow:      #00e5ff;
+    --glow2:     #00ff9d;
+    --warn:      #ffb300;
+    --dead:      #ff3d5a;
+    --text:      #cde8f0;
+    --muted:     #4a7a8a;
+    --mono:      "Share Tech Mono", monospace;
+    --sans:      "Syne", sans-serif;
+    --r:         4px;
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--mono);
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* ── scanline overlay ────────────────────────────────────── */
+  body::before {
+    content: "";
+    position: fixed; inset: 0;
+    background: repeating-linear-gradient(
+      0deg,
+      transparent,
+      transparent 2px,
+      rgba(0,229,255,.018) 2px,
+      rgba(0,229,255,.018) 4px
+    );
+    pointer-events: none;
+    z-index: 9999;
+  }
+
+  /* ── top header ──────────────────────────────────────────── */
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 18px 32px;
+    border-bottom: 1px solid var(--border);
+    background: rgba(0,229,255,.04);
+    backdrop-filter: blur(4px);
+    position: sticky; top: 0; z-index: 100;
+  }
+  .logo {
+    font-family: var(--sans);
+    font-weight: 800;
+    font-size: 1.15rem;
+    letter-spacing: .04em;
+    color: var(--glow);
+    text-shadow: 0 0 18px rgba(0,229,255,.5);
+  }
+  .logo span { color: var(--text); font-weight: 400; }
+  .status-pill {
+    display: flex; align-items: center; gap: 8px;
+    font-size: .72rem; letter-spacing: .08em; color: var(--muted);
+  }
+  .dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--dead); transition: background .4s;
+    box-shadow: 0 0 0 0 transparent;
+  }
+  .dot.live {
+    background: var(--glow2);
+    animation: pulse 1.6s ease infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(0,255,157,.5); }
+    50%       { box-shadow: 0 0 0 6px rgba(0,255,157,0); }
+  }
+  .clock { font-size: .7rem; color: var(--muted); }
+
+  /* ── main grid ───────────────────────────────────────────── */
+  main {
+    display: grid;
+    grid-template-columns: 220px 1fr;
+    grid-template-rows: auto 1fr;
+    gap: 0;
+    height: calc(100vh - 57px);
+  }
+
+  /* ── sidebar ─────────────────────────────────────────────── */
+  aside {
+    grid-row: 1 / 3;
+    border-right: 1px solid var(--border);
+    padding: 24px 16px;
+    display: flex; flex-direction: column; gap: 12px;
+    overflow-y: auto;
+  }
+  .side-label {
+    font-size: .6rem; letter-spacing: .14em;
+    color: var(--muted); text-transform: uppercase;
+    padding: 0 8px; margin-bottom: 4px;
+  }
+  .stat-card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: var(--r);
+    padding: 14px 16px;
+    position: relative; overflow: hidden;
+  }
+  .stat-card::before {
+    content: "";
+    position: absolute; top: 0; left: 0;
+    width: 3px; height: 100%;
+    background: var(--glow);
+  }
+  .stat-card.green::before  { background: var(--glow2); }
+  .stat-card.yellow::before { background: var(--warn); }
+  .stat-card.red::before    { background: var(--dead); }
+  .stat-label { font-size: .62rem; color: var(--muted); letter-spacing: .08em; }
+  .stat-value {
+    font-family: var(--sans); font-weight: 800;
+    font-size: 2rem; line-height: 1.1;
+    color: var(--glow);
+    transition: all .3s;
+  }
+  .stat-card.green  .stat-value { color: var(--glow2); }
+  .stat-card.yellow .stat-value { color: var(--warn); }
+  .stat-card.red    .stat-value { color: var(--dead); }
+
+  .sep {
+    height: 1px; background: var(--border);
+    margin: 4px 0;
+  }
+
+  /* interval control */
+  .ctrl-row {
+    display: flex; align-items: center; gap: 8px;
+    font-size: .65rem; color: var(--muted);
+  }
+  .ctrl-row input[type=range] {
+    flex: 1; accent-color: var(--glow);
+  }
+
+  .btn {
+    width: 100%; padding: 10px;
+    background: transparent;
+    border: 1px solid var(--glow);
+    border-radius: var(--r);
+    color: var(--glow);
+    font-family: var(--mono);
+    font-size: .72rem; letter-spacing: .06em;
+    cursor: pointer; transition: background .2s;
+  }
+  .btn:hover { background: rgba(0,229,255,.1); }
+
+  /* ── top-bar: search & filter ────────────────────────────── */
+  .topbar {
+    padding: 14px 24px;
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 12px;
+  }
+  .search-wrap {
+    position: relative; flex: 1;
+  }
+  .search-wrap input {
+    width: 100%; padding: 8px 12px 8px 34px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: var(--r);
+    color: var(--text);
+    font-family: var(--mono); font-size: .78rem;
+    outline: none; transition: border-color .2s;
+  }
+  .search-wrap input:focus { border-color: var(--glow); }
+  .search-icon {
+    position: absolute; left: 10px; top: 50%; transform: translateY(-50%);
+    color: var(--muted); font-size: .9rem;
+  }
+  .filter-btn {
+    padding: 8px 14px;
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: var(--r); color: var(--muted);
+    font-family: var(--mono); font-size: .72rem; cursor: pointer;
+    transition: all .2s;
+  }
+  .filter-btn.active { border-color: var(--glow); color: var(--glow); }
+  #last-updated { font-size: .62rem; color: var(--muted); white-space: nowrap; }
+
+  /* ── host table ──────────────────────────────────────────── */
+  .table-wrap {
+    overflow-y: auto;
+    padding: 0 24px 24px;
+  }
+  table {
+    width: 100%; border-collapse: collapse;
+    font-size: .75rem;
+  }
+  thead th {
+    position: sticky; top: 0;
+    background: var(--bg);
+    padding: 12px 10px;
+    text-align: left;
+    font-size: .62rem; letter-spacing: .1em;
+    color: var(--muted); text-transform: uppercase;
+    border-bottom: 1px solid var(--border);
+    cursor: pointer; user-select: none;
+  }
+  thead th:hover { color: var(--glow); }
+  thead th.sorted { color: var(--glow); }
+  tbody tr {
+    border-bottom: 1px solid rgba(14,45,63,.6);
+    transition: background .15s;
+    animation: rowIn .3s ease both;
+  }
+  @keyframes rowIn {
+    from { opacity: 0; transform: translateX(-8px); }
+    to   { opacity: 1; transform: none; }
+  }
+  tbody tr:hover { background: rgba(0,229,255,.04); }
+  tbody td {
+    padding: 11px 10px;
+    vertical-align: middle;
+  }
+
+  .badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 20px;
+    font-size: .65rem; letter-spacing: .06em;
+  }
+  .badge-online {
+    background: rgba(0,255,157,.12);
+    border: 1px solid rgba(0,255,157,.35);
+    color: var(--glow2);
+  }
+  .badge-offline {
+    background: rgba(255,61,90,.1);
+    border: 1px solid rgba(255,61,90,.3);
+    color: var(--dead);
+  }
+  .badge-idle {
+    background: rgba(255,179,0,.1);
+    border: 1px solid rgba(255,179,0,.3);
+    color: var(--warn);
+  }
+
+  .mac  { color: var(--glow);  font-size: .72rem; }
+  .ip   { color: var(--glow2); }
+  .dpid { color: var(--warn);  font-size: .65rem; }
+  .pkt  { color: var(--muted); }
+
+  /* ── empty / loading state ───────────────────────────────── */
+  .empty-row td {
+    text-align: center; padding: 60px 0;
+    color: var(--muted); font-size: .8rem;
+    letter-spacing: .08em;
+  }
+  .spinner {
+    display: inline-block; width: 18px; height: 18px;
+    border: 2px solid var(--border);
+    border-top-color: var(--glow);
+    border-radius: 50%;
+    animation: spin .7s linear infinite;
+    vertical-align: middle; margin-right: 8px;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* ── detail drawer ───────────────────────────────────────── */
+  #drawer {
+    position: fixed; right: -360px; top: 57px;
+    width: 340px; height: calc(100vh - 57px);
+    background: var(--panel);
+    border-left: 1px solid var(--border);
+    padding: 24px;
+    transition: right .3s cubic-bezier(.4,0,.2,1);
+    overflow-y: auto; z-index: 200;
+  }
+  #drawer.open { right: 0; }
+  .drawer-close {
+    position: absolute; top: 16px; right: 16px;
+    background: none; border: none;
+    color: var(--muted); font-size: 1.2rem; cursor: pointer;
+  }
+  .drawer-close:hover { color: var(--dead); }
+  .drawer-title {
+    font-family: var(--sans); font-weight: 700; font-size: 1rem;
+    color: var(--glow); margin-bottom: 20px;
+    text-shadow: 0 0 12px rgba(0,229,255,.4);
+  }
+  .drow { margin-bottom: 14px; }
+  .dkey { font-size: .6rem; letter-spacing: .12em; color: var(--muted); text-transform: uppercase; }
+  .dval { font-size: .82rem; color: var(--text); margin-top: 2px; word-break: break-all; }
+
+  /* ── responsive ─────────────────────────────────────────── */
+  @media (max-width: 768px) {
+    main { grid-template-columns: 1fr; }
+    aside { display: none; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ── HEADER ─────────────────────────────────────────────────────────── -->
+<header>
+  <div class="logo">HOST<span>DISCOVERY</span> // SDN</div>
+  <div class="status-pill">
+    <div class="dot" id="conn-dot"></div>
+    <span id="conn-label">CONNECTING</span>
+  </div>
+  <div class="clock" id="clock"></div>
+</header>
+
+<!-- ── LAYOUT ─────────────────────────────────────────────────────────── -->
+<main>
+  <!-- Sidebar -->
+  <aside>
+    <div class="side-label">Network Stats</div>
+    <div class="stat-card">
+      <div class="stat-label">TOTAL HOSTS</div>
+      <div class="stat-value" id="s-total">—</div>
+    </div>
+    <div class="stat-card green">
+      <div class="stat-label">ONLINE NOW</div>
+      <div class="stat-value" id="s-online">—</div>
+    </div>
+    <div class="stat-card yellow">
+      <div class="stat-label">SWITCHES</div>
+      <div class="stat-value" id="s-switches">—</div>
+    </div>
+    <div class="stat-card red">
+      <div class="stat-label">PACKETS SEEN</div>
+      <div class="stat-value" id="s-pkts">—</div>
+    </div>
+
+    <div class="sep"></div>
+    <div class="side-label">Poll Interval</div>
+    <div class="ctrl-row">
+      <input type="range" id="interval-slider" min="1" max="30" value="3"/>
+      <span id="interval-label">3s</span>
+    </div>
+
+    <div class="sep"></div>
+    <button class="btn" onclick="fetchAll()">⟳ REFRESH NOW</button>
+    <button class="btn" onclick="clearTable()" style="border-color:var(--dead);color:var(--dead)">✕ CLEAR VIEW</button>
+
+    <div class="sep"></div>
+    <div class="side-label">API Endpoint</div>
+    <input id="api-url" style="
+      width:100%; padding:6px 8px;
+      background:var(--bg); border:1px solid var(--border);
+      border-radius:var(--r); color:var(--muted);
+      font-family:var(--mono); font-size:.62rem; outline:none;" 
+      value="http://localhost:8080/hostdiscovery"/>
+  </aside>
+
+  <!-- Top search bar -->
+  <div class="topbar">
+    <div class="search-wrap">
+      <span class="search-icon">⌕</span>
+      <input type="text" id="search" placeholder="Filter by MAC, IP, switch, port…" oninput="renderTable()"/>
+    </div>
+    <button class="filter-btn active" data-filter="all"    onclick="setFilter(this)">ALL</button>
+    <button class="filter-btn"        data-filter="online" onclick="setFilter(this)">ONLINE</button>
+    <button class="filter-btn"        data-filter="idle"   onclick="setFilter(this)">IDLE</button>
+    <button class="filter-btn"        data-filter="offline"onclick="setFilter(this)">OFFLINE</button>
+    <span id="last-updated">—</span>
+  </div>
+
+  <!-- Table -->
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th onclick="sortBy('mac')"        class="sorted" data-col="mac">MAC ▴</th>
+          <th onclick="sortBy('ip')"          data-col="ip">IP ADDRESS</th>
+          <th onclick="sortBy('dpid')"        data-col="dpid">SWITCH DPID</th>
+          <th onclick="sortBy('port')"        data-col="port">PORT</th>
+          <th onclick="sortBy('status')"      data-col="status">STATUS</th>
+          <th onclick="sortBy('first_seen_ts')" data-col="first_seen_ts">FIRST SEEN</th>
+          <th onclick="sortBy('last_seen_ts')"  data-col="last_seen_ts">LAST SEEN</th>
+          <th onclick="sortBy('pkt_count')"   data-col="pkt_count">PACKETS</th>
+        </tr>
+      </thead>
+      <tbody id="host-tbody">
+        <tr class="empty-row"><td colspan="8"><span class="spinner"></span>Waiting for controller…</td></tr>
+      </tbody>
+    </table>
+  </div>
+</main>
+
+<!-- ── DETAIL DRAWER ───────────────────────────────────────────────────── -->
+<div id="drawer">
+  <button class="drawer-close" onclick="closeDrawer()">✕</button>
+  <div class="drawer-title" id="drawer-mac">—</div>
+  <div id="drawer-body"></div>
+</div>
+
+<script>
+// ────────────────────────────────────────────────────────────────────────────
+// State
+// ────────────────────────────────────────────────────────────────────────────
+let hosts       = [];
+let currentFilter = "all";
+let sortCol       = "mac";
+let sortAsc       = true;
+let pollTimer     = null;
+let pollInterval  = 3000;
+
+// ────────────────────────────────────────────────────────────────────────────
+// Clock
+// ────────────────────────────────────────────────────────────────────────────
+setInterval(() => {
+  document.getElementById("clock").textContent =
+    new Date().toLocaleTimeString("en-GB", {hour12: false});
+}, 1000);
+
+// ────────────────────────────────────────────────────────────────────────────
+// API fetch
+// ────────────────────────────────────────────────────────────────────────────
+function apiBase() {
+  return document.getElementById("api-url").value.replace(/\/$/, "");
+}
+
+async function fetchAll() {
+  try {
+    const [hRes, sRes] = await Promise.all([
+      fetch(apiBase() + "/hosts"),
+      fetch(apiBase() + "/stats"),
+    ]);
+    if (!hRes.ok) throw new Error("HTTP " + hRes.status);
+    const hData = await hRes.json();
+    const sData = await sRes.json();
+
+    hosts = hData.hosts || [];
+    updateStats(sData);
+    renderTable();
+
+    document.getElementById("conn-dot").classList.add("live");
+    document.getElementById("conn-label").textContent = "LIVE";
+    document.getElementById("last-updated").textContent =
+      "Updated " + new Date().toLocaleTimeString();
+  } catch(e) {
+    document.getElementById("conn-dot").classList.remove("live");
+    document.getElementById("conn-label").textContent = "OFFLINE";
+    // Show demo data when controller is not running
+    loadDemoData();
+  }
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Demo / offline data so the dashboard is never blank
+// ────────────────────────────────────────────────────────────────────────────
+function loadDemoData() {
+  const now = Date.now() / 1000;
+  hosts = [
+    { mac:"00:00:00:00:01:01", ip:"10.0.1.1", dpid:"0000000000000001", port:1, first_seen_ts:"09:12:04", last_seen_ts:"09:14:55", last_seen_ago:3,  pkt_count:142 },
+    { mac:"00:00:00:00:01:02", ip:"10.0.1.2", dpid:"0000000000000001", port:2, first_seen_ts:"09:12:04", last_seen_ts:"09:15:01", last_seen_ago:0,  pkt_count:98  },
+    { mac:"00:00:00:00:01:03", ip:"10.0.1.3", dpid:"0000000000000001", port:3, first_seen_ts:"09:12:05", last_seen_ts:"09:14:48", last_seen_ago:15, pkt_count:61  },
+    { mac:"00:00:00:00:02:01", ip:"10.0.2.1", dpid:"0000000000000002", port:1, first_seen_ts:"09:12:06", last_seen_ts:"09:15:02", last_seen_ago:1,  pkt_count:210 },
+    { mac:"00:00:00:00:02:02", ip:"10.0.2.2", dpid:"0000000000000002", port:2, first_seen_ts:"09:12:07", last_seen_ts:"09:13:10", last_seen_ago:90, pkt_count:44  },
+  ];
+  updateStats({ total_hosts:5, online_hosts:3, switches:2, total_packets:555 });
+  renderTable();
+  document.getElementById("last-updated").textContent = "⚠ DEMO MODE – controller offline";
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Stats sidebar
+// ────────────────────────────────────────────────────────────────────────────
+function updateStats(s) {
+  document.getElementById("s-total").textContent   = s.total_hosts   ?? "—";
+  document.getElementById("s-online").textContent  = s.online_hosts  ?? "—";
+  document.getElementById("s-switches").textContent= s.switches      ?? "—";
+  document.getElementById("s-pkts").textContent    = s.total_packets ?? "—";
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Status helper
+// ────────────────────────────────────────────────────────────────────────────
+function hostStatus(h) {
+  const ago = h.last_seen_ago ?? 999;
+  if (ago < 5)  return "online";
+  if (ago < 30) return "idle";
+  return "offline";
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Render table
+// ────────────────────────────────────────────────────────────────────────────
+function renderTable() {
+  const query    = document.getElementById("search").value.toLowerCase();
+  const tbody    = document.getElementById("host-tbody");
+
+  let data = hosts.map(h => ({ ...h, status: hostStatus(h) }));
+
+  // Filter
+  if (currentFilter !== "all") data = data.filter(h => h.status === currentFilter);
+  if (query) data = data.filter(h =>
+    JSON.stringify(h).toLowerCase().includes(query));
+
+  // Sort
+  data.sort((a, b) => {
+    let av = a[sortCol] ?? "", bv = b[sortCol] ?? "";
+    if (typeof av === "number") return sortAsc ? av - bv : bv - av;
+    return sortAsc
+      ? String(av).localeCompare(String(bv))
+      : String(bv).localeCompare(String(av));
+  });
+
+  if (data.length === 0) {
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="8">No hosts match the current filter.</td></tr>`;
+    return;
+  }
+
+  tbody.innerHTML = data.map((h, i) => {
+    const badgeClass = h.status === "online"  ? "badge-online"
+                     : h.status === "idle"    ? "badge-idle"
+                     :                           "badge-offline";
+    return `<tr style="animation-delay:${i*30}ms" onclick="openDrawer(${JSON.stringify(h).replace(/"/g,"&quot;")})">
+      <td class="mac">${h.mac}</td>
+      <td class="ip">${h.ip}</td>
+      <td class="dpid">${(h.dpid||"").slice(-8)}</td>
+      <td>${h.port}</td>
+      <td><span class="badge ${badgeClass}">${h.status.toUpperCase()}</span></td>
+      <td>${h.first_seen_ts ?? "—"}</td>
+      <td>${h.last_seen_ts  ?? "—"}</td>
+      <td class="pkt">${h.pkt_count ?? 0}</td>
+    </tr>`;
+  }).join("");
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Sort
+// ────────────────────────────────────────────────────────────────────────────
+function sortBy(col) {
+  if (sortCol === col) sortAsc = !sortAsc;
+  else { sortCol = col; sortAsc = true; }
+  document.querySelectorAll("thead th").forEach(th => {
+    th.classList.toggle("sorted", th.dataset.col === col);
+    if (th.dataset.col === col)
+      th.textContent = th.textContent.replace(/[▴▾]/g,"").trim() + (sortAsc?" ▴":" ▾");
+    else
+      th.textContent = th.textContent.replace(/[▴▾]/g,"").trim();
+  });
+  renderTable();
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Filter
+// ────────────────────────────────────────────────────────────────────────────
+function setFilter(btn) {
+  currentFilter = btn.dataset.filter;
+  document.querySelectorAll(".filter-btn").forEach(b => b.classList.remove("active"));
+  btn.classList.add("active");
+  renderTable();
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Detail drawer
+// ────────────────────────────────────────────────────────────────────────────
+function openDrawer(h) {
+  document.getElementById("drawer-mac").textContent = h.mac;
+  const fields = [
+    ["IP Address",     h.ip],
+    ["Switch DPID",    h.dpid],
+    ["Port",           h.port],
+    ["Status",         hostStatus(h).toUpperCase()],
+    ["First Seen",     h.first_seen_ts],
+    ["Last Seen",      h.last_seen_ts],
+    ["Last Seen Ago",  (h.last_seen_ago ?? "—") + "s"],
+    ["Online Duration",(h.online_duration ?? "—") + "s"],
+    ["Packet Count",   h.pkt_count],
+  ];
+  document.getElementById("drawer-body").innerHTML =
+    fields.map(([k,v]) =>
+      `<div class="drow"><div class="dkey">${k}</div><div class="dval">${v ?? "—"}</div></div>`
+    ).join("");
+  document.getElementById("drawer").classList.add("open");
+}
+function closeDrawer() {
+  document.getElementById("drawer").classList.remove("open");
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Utility
+// ────────────────────────────────────────────────────────────────────────────
+function clearTable() {
+  hosts = [];
+  renderTable();
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Polling
+// ────────────────────────────────────────────────────────────────────────────
+function startPolling() {
+  clearInterval(pollTimer);
+  pollTimer = setInterval(fetchAll, pollInterval);
+}
+
+document.getElementById("interval-slider").addEventListener("input", function() {
+  pollInterval = this.value * 1000;
+  document.getElementById("interval-label").textContent = this.value + "s";
+  startPolling();
+});
+
+// ── Boot ─────────────────────────────────────────────────────────────────────
+fetchAll();
+startPolling();
+</script>
+</body>
+</html>
