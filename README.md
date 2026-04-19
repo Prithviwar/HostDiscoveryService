@@ -149,19 +149,19 @@ Add your screenshots to a `screenshots/` folder in the repo:
 
 <img width="664" height="285" alt="image" src="https://github.com/user-attachments/assets/ffb9b1a6-39d2-48e4-8681-83baa34bd651" />
 
-- `screenshots/flow_table_s1.png` – ovs-ofctl dump after learning
+- `screenshots/dumplflows.png` – ovs-ofctl dump after learning
 
 <img width="1189" height="209" alt="image" src="https://github.com/user-attachments/assets/434423e7-5b39-4116-aa91-4e95c1abf8e7" />
 
-- `screenshots/iperf_result.png` – iperf throughput
+- `screenshots/iperf.png` – iperf throughput
 
 <img width="1116" height="280" alt="image" src="https://github.com/user-attachments/assets/53f32df6-fb0f-4c60-9913-9c8f037e3ac7" />
 
-- `screenshots/dashboard.png` – HTML dashboard with hosts
+- `screenshots/newhost.png` – HTML dashboard with hosts
 
 <img width="1059" height="403" alt="image" src="https://github.com/user-attachments/assets/02affbfb-657d-40b4-a94e-a0c864b7d486" />
 
-- `screenshots/wireshark_packetin.png` – PacketIn frames in Wireshark
+- `screenshots/controlswitch.png` – Control Switch demonstration
 
 <img width="847" height="295" alt="image" src="https://github.com/user-attachments/assets/c9ec683f-58b7-4a5b-af9d-7f15638b2d26" />
 
